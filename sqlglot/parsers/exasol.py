@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import typing as t
 
 from sqlglot import exp, parser
 from sqlglot.dialects.dialect import (
@@ -146,6 +147,60 @@ class ExasolParser(parser.Parser):
         # https://docs.exasol.com/db/latest/sql_references/functions/alphabeticallistfunctions/json_extract.htm
         "JSON_EXTRACT": lambda self: self._parse_json_extract(),
     }
+
+    def _parse_table(
+        self,
+        schema: bool = False,
+        joins: bool = False,
+        alias_tokens: t.Collection[TokenType] | None = None,
+        parse_bracket: bool = False,
+        is_db_reference: bool = False,
+        parse_partition: bool = False,
+        consume_pipe: bool = False,
+    ) -> exp.Expr | None:
+        if value_range := self._parse_value_range_table():
+            if joins:
+                for join in self._parse_joins():
+                    value_range.append("joins", join)
+            return value_range
+
+        return super()._parse_table(
+            schema=schema,
+            joins=joins,
+            alias_tokens=alias_tokens,
+            parse_bracket=parse_bracket,
+            is_db_reference=is_db_reference,
+            parse_partition=parse_partition,
+            consume_pipe=consume_pipe,
+        )
+
+    # https://docs.exasol.com/db/latest/sql/select.htm
+    def _parse_value_range_table(self) -> exp.Table | None:
+        index = self._index
+        wrapped = self._match(TokenType.L_PAREN)
+        if not self._match_text_seq("VALUES", "BETWEEN"):
+            self._retreat(index)
+            return None
+
+        start = self._parse_bitwise()
+        self._match(TokenType.AND)
+        end = self._parse_bitwise()
+        step = self._parse_bitwise() if self._match_text_seq("WITH", "STEP") else None
+
+        if wrapped:
+            self._match_r_paren()
+
+        # The generated column is named RANGE_VALUE; a table alias alone doesn't rename it
+        alias = self._parse_table_alias()
+        if alias and not alias.columns:
+            alias.set("columns", [exp.to_identifier("RANGE_VALUE")])
+
+        return self.expression(
+            exp.Table(
+                this=exp.ExplodingGenerateSeries(start=start, end=end, step=step),
+                alias=alias,
+            )
+        )
 
     def _parse_statement(self) -> exp.Expr | None:
         # https://docs.exasol.com/db/latest/sql/open_schema.htm

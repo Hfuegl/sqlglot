@@ -101,6 +101,26 @@ def _add_local_prefix_for_aliases(expression: exp.Expr, dialect: Dialect) -> exp
     return expression
 
 
+# https://docs.exasol.com/db/latest/sql/select.htm (VALUES BETWEEN)
+def _generate_series_sql(self: ExasolGenerator, expression: exp.GenerateSeries) -> str:
+    start = expression.args.get("start")
+    end = expression.args.get("end")
+    step = expression.args.get("step")
+
+    if not isinstance(expression.parent, exp.Table):
+        self.unsupported("Exasol only supports value ranges as a FROM item (VALUES BETWEEN)")
+        return self.func("GENERATE_SERIES", start, end, step)
+
+    if step and step.is_number and step.to_py() <= 0:
+        self.unsupported("Exasol only supports a positive step in VALUES BETWEEN")
+
+    if end and expression.args.get("is_end_exclusive"):
+        end = end - 1
+
+    sql = f"VALUES BETWEEN {self.sql(start)} AND {self.sql(end)}"
+    return f"{sql} WITH STEP {self.sql(step)}" if step else sql
+
+
 def _trunc_sql(
     self: ExasolGenerator, kind: str, expression: exp.DateTrunc | exp.TimestampTrunc
 ) -> str:
@@ -369,6 +389,8 @@ class ExasolGenerator(generator.Generator):
 
     TRANSFORMS = {
         **generator.Generator.TRANSFORMS,
+        exp.ExplodingGenerateSeries: _generate_series_sql,
+        exp.GenerateSeries: _generate_series_sql,
         # https://docs.exasol.com/db/latest/sql_references/functions/alphabeticallistfunctions/every.htm
         exp.All: rename_func("EVERY"),
         # https://docs.exasol.com/db/latest/sql_references/functions/alphabeticallistfunctions/bit_and.htm

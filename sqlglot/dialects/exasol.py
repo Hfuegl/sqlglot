@@ -25,6 +25,8 @@ class Exasol(Dialect):
     # In PREFERRING, a name resolves to a source column before a projection alias; aliases
     # must be referenced explicitly via LOCAL.<alias>
     COLUMN_ALIAS_PRECEDENCE = {exp.Preferring: AliasPrecedence.SOURCE}
+    # https://docs.exasol.com/db/latest/sql/select.htm (VALUES BETWEEN)
+    DEFAULT_FUNCTIONS_COLUMN_NAMES = {exp.ExplodingGenerateSeries: "RANGE_VALUE"}
 
     TIME_MAPPING = {
         "yyyy": "%Y",

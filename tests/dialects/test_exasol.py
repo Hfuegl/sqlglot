@@ -1158,3 +1158,53 @@ class TestExasol(Validator):
         ):
             with self.subTest(sql=sql), self.assertRaises(UnsupportedError):
                 transpile(sql, read="exasol", write="duckdb", unsupported_level=ErrorLevel.RAISE)
+
+    def test_values_between(self):
+        # https://docs.exasol.com/db/latest/sql/select.htm
+        for sql in (
+            "SELECT * FROM VALUES BETWEEN 0 AND 5",
+            "SELECT * FROM VALUES BETWEEN 1 AND 10 WITH STEP 2",
+            "SELECT range_value AS mahnstufe_id FROM VALUES BETWEEN 0 AND 5",
+            "SELECT x FROM VALUES BETWEEN 1 AND 3 AS v(x)",
+            "SELECT t.id, r.x FROM t JOIN VALUES BETWEEN 1 AND 2 AS r(x) ON t.id = r.x",
+            "SELECT * FROM t, VALUES BETWEEN 1 AND 2 AS r(x)",
+            "SELECT * FROM VALUES BETWEEN -2 AND 1 + 1",
+            "WITH r AS (SELECT range_value FROM VALUES BETWEEN 1 AND 3) SELECT * FROM r",
+        ):
+            with self.subTest(sql=sql):
+                self.validate_identity(sql)
+
+        # A table alias alone doesn't rename the RANGE_VALUE column
+        self.validate_identity(
+            "SELECT v.range_value FROM VALUES BETWEEN 1 AND 3 AS v",
+            "SELECT v.range_value FROM VALUES BETWEEN 1 AND 3 AS v(RANGE_VALUE)",
+        )
+        self.validate_identity(
+            "SELECT * FROM (VALUES BETWEEN 1 AND 3) AS v(x)",
+            "SELECT * FROM VALUES BETWEEN 1 AND 3 AS v(x)",
+        )
+
+        series = self.parse_one("SELECT * FROM VALUES BETWEEN 1 AND 10 WITH STEP 2").find(
+            exp.ExplodingGenerateSeries
+        )
+        self.assertEqual([series.args[k].sql() for k in ("start", "end", "step")], ["1", "10", "2"])
+
+        self.validate_all(
+            "SELECT x FROM VALUES BETWEEN 0 AND 5 WITH STEP 2 AS t(x)",
+            read={"postgres": "SELECT x FROM GENERATE_SERIES(0, 5, 2) AS t(x)"},
+            write={
+                "postgres": "SELECT x FROM GENERATE_SERIES(0, 5, 2) AS t(x)",
+                "duckdb": "SELECT x FROM GENERATE_SERIES(0, 5, 2) AS t(x)",
+            },
+        )
+        self.validate_all(
+            "SELECT x FROM VALUES BETWEEN 0 AND 6 - 1 AS t(x)",
+            read={"duckdb": "SELECT x FROM RANGE(0, 6) AS t(x)"},
+        )
+
+        for sql, read in (
+            ("SELECT x FROM GENERATE_SERIES(5, 1, -1) AS t(x)", "postgres"),
+            ("SELECT GENERATE_SERIES(1, 3)", "postgres"),
+        ):
+            with self.subTest(sql=sql), self.assertRaises(UnsupportedError):
+                transpile(sql, read=read, write="exasol", unsupported_level=ErrorLevel.RAISE)

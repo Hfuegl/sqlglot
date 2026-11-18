@@ -1482,3 +1482,29 @@ class TestLineage(unittest.TestCase):
             node.source.sql(dialect="exasol"),
             "SELECT CARS.MODEL AS MODEL FROM CARS AS CARS PREFERRING HIGH -CARS.POWER",
         )
+
+    def test_lineage_exasol_values_between(self) -> None:
+        # https://docs.exasol.com/db/latest/sql/select.htm
+        node = lineage(
+            "mahnstufe_id",
+            "SELECT range_value AS mahnstufe_id FROM VALUES BETWEEN 0 AND 5",
+            schema={},
+            dialect="exasol",
+        )
+        self.assertEqual(
+            node.source.sql(dialect="exasol"),
+            "SELECT _0.RANGE_VALUE AS MAHNSTUFE_ID FROM VALUES BETWEEN 0 AND 5 AS _0(RANGE_VALUE)",
+        )
+        downstream = node.downstream[0]
+        self.assertEqual(downstream.name, "_0.RANGE_VALUE")
+        self.assertEqual(
+            downstream.source.sql(dialect="exasol"), "VALUES BETWEEN 0 AND 5 AS _0(RANGE_VALUE)"
+        )
+
+        node = lineage(
+            "d",
+            "SELECT v.range_value * 2 AS d FROM t JOIN VALUES BETWEEN 1 AND 3 AS v ON t.id = v.range_value",
+            schema={"t": {"id": "INT"}},
+            dialect="exasol",
+        )
+        self.assertEqual([n.name for n in node.downstream], ["V.RANGE_VALUE"])
