@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 
-from sqlglot import tokens
+from sqlglot import exp, tokens
 from sqlglot.dialects.dialect import (
+    AliasPrecedence,
     Dialect,
     NormalizationStrategy,
 )
@@ -21,6 +22,9 @@ class Exasol(Dialect):
     NULL_ORDERING = "nulls_are_last"
     # https://docs.exasol.com/db/latest/sql_references/literals.htm#StringLiterals
     CONCAT_COALESCE = True
+    # In PREFERRING, a name resolves to a source column before a projection alias; aliases
+    # must be referenced explicitly via LOCAL.<alias>
+    COLUMN_ALIAS_PRECEDENCE = {exp.Preferring: AliasPrecedence.SOURCE}
 
     TIME_MAPPING = {
         "yyyy": "%Y",

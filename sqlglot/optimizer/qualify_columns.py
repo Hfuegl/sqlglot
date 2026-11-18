@@ -442,6 +442,10 @@ def _expand_alias_refs(
                     or (table.name, column.name) in grouped_columns
                 )
 
+            # An explicit alias reference (e.g. Exasol's LOCAL.<alias>) never resolves to a source
+            if column.meta_get("alias_ref"):
+                prefer_column = False
+
             if table and (not alias_expr or skip_replace or prefer_column):
                 column.set("table", table)
             elif not column.table and alias_expr and not skip_replace:
@@ -505,6 +509,7 @@ def _expand_alias_refs(
                     alias_to_expression.pop(recursive_cte_column.output_name, None)
 
     replace_columns(expression.args.get("where"))
+    replace_columns(expression.args.get("preferring"), resolve_table=True)
     replace_columns(expression.args.get("group"), literal_index=True)
 
     if (
@@ -1053,6 +1058,10 @@ def _qualify_columns(
                 # If the column is under the Pivot expression, we need to qualify it
                 # using the name of the pivoted source instead of the pivot's alias
                 column.set("table", exp.to_identifier(scope.pivots[-1].alias))
+                continue
+
+            # Explicit alias references are resolved by _expand_alias_refs
+            if column.meta_get("alias_ref"):
                 continue
 
             # column_table can be a '' because bigquery unnest has no table alias

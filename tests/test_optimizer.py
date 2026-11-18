@@ -3034,6 +3034,66 @@ SELECT :with_,WITH :expressions,CTE :this,UNION :this,SELECT :expressions,1,:exp
                                 connection.execute(optimized.sql("duckdb")).fetchall(),
                             )
 
+    def test_exasol_preferring(self):
+        # https://docs.exasol.com/db/latest/advanced_analytics/skyline.htm
+        schema = {"t": {"id": "INT", "grp": "VARCHAR", "a": "INT", "b": "INT"}}
+
+        # PREFERRING selects rows before the outer predicate runs, so the outer predicate
+        # must not be pushed down and the derived table must not be merged
+        self.assertEqual(
+            optimizer.optimize(
+                "SELECT s.id FROM (SELECT id, a FROM t PREFERRING HIGH a) AS s WHERE s.a < 3",
+                schema=schema,
+                dialect="exasol",
+            ).sql("exasol"),
+            'WITH "S" AS (SELECT "T"."ID" AS "ID", "T"."A" AS "A" FROM "T" AS "T" PREFERRING HIGH "T"."A") '
+            'SELECT "S"."ID" AS "ID" FROM "S" AS "S" WHERE "S"."A" < 3',
+        )
+
+        # LOCAL.<alias> is expanded, a plain name resolves to the source column first
+        self.assertEqual(
+            qualify(
+                parse_one(
+                    "SELECT id, -a AS b, a > 0 AS f FROM t PREFERRING HIGH b PLUS HIGH LOCAL.f "
+                    "PARTITION BY grp",
+                    read="exasol",
+                ),
+                schema=schema,
+                dialect="exasol",
+            ).sql("exasol"),
+            'SELECT "T"."ID" AS "ID", -"T"."A" AS "B", "T"."A" > 0 AS "F" FROM "T" AS "T" '
+            'PREFERRING HIGH "T"."B" PLUS HIGH "T"."A" > 0 PARTITION BY "T"."GRP"',
+        )
+
+        # An expanded AND / OR / NOT operand of HIGH / LOW needs parentheses
+        self.assertEqual(
+            qualify(
+                parse_one(
+                    "SELECT id, a > 0 OR b = 3 AS f, NOT a = 1 AS g FROM t "
+                    "PREFERRING HIGH LOCAL.f PLUS LOW LOCAL.g",
+                    read="exasol",
+                ),
+                schema=schema,
+                dialect="exasol",
+            ).sql("exasol"),
+            'SELECT "T"."ID" AS "ID", "T"."A" > 0 OR "T"."B" = 3 AS "F", NOT "T"."A" = 1 AS "G" '
+            'FROM "T" AS "T" PREFERRING HIGH ("T"."A" > 0 OR "T"."B" = 3) PLUS LOW (NOT "T"."A" = 1)',
+        )
+
+        # An explicit LOCAL reference resolves to the alias, even if a source column shadows it
+        self.assertEqual(
+            qualify(
+                parse_one(
+                    "SELECT id, -a AS b FROM t WHERE LOCAL.b < 0 PREFERRING HIGH LOCAL.b PLUS LOW b",
+                    read="exasol",
+                ),
+                schema=schema,
+                dialect="exasol",
+            ).sql("exasol"),
+            'SELECT "T"."ID" AS "ID", -"T"."A" AS "B" FROM "T" AS "T" WHERE -"T"."A" < 0 '
+            'PREFERRING HIGH -"T"."A" PLUS LOW "T"."B"',
+        )
+
     def test_merge_subqueries_match(self):
         sql = (
             "SELECT x.a, q.c FROM x LEFT JOIN "

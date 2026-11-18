@@ -307,6 +307,7 @@ def nodes_for_predicate(
                 and not node.args.get("limit")
                 and not node.args.get("offset")
                 and not node.args.get("qualify")
+                and not node.args.get("preferring")
                 and not (distinct and distinct.args.get("on"))
             ):
                 nodes[table] = node

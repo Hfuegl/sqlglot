@@ -1379,3 +1379,106 @@ class TestLineage(unittest.TestCase):
                 seen.add(id(node))
         for nid in seen:
             self.assertEqual(counts.get(nid, 0), 1)
+
+    def test_lineage_exasol_preferring(self) -> None:
+        # https://docs.exasol.com/db/latest/advanced_analytics/skyline.htm
+        schema = {
+            "cars": {"model": "VARCHAR", "price": "INT", "power": "INT", "color": "VARCHAR"},
+            "fav": {"color": "VARCHAR"},
+            "makers": {"model": "VARCHAR", "country": "VARCHAR"},
+        }
+
+        # Columns only referenced in PREFERRING don't contribute to the output column lineage
+        node = lineage(
+            "model",
+            "SELECT model, price FROM cars PREFERRING LOW price PLUS HIGH power",
+            schema=schema,
+            dialect="exasol",
+        )
+        self.assertEqual(
+            node.source.sql(dialect="exasol"),
+            "SELECT CARS.MODEL AS MODEL FROM CARS AS CARS PREFERRING LOW CARS.PRICE PLUS HIGH CARS.POWER",
+        )
+        self.assertEqual([d.name for d in node.downstream], ["CARS.MODEL"])
+
+        # Through a CTE with PREFERRING ... PARTITION BY
+        node = lineage(
+            "model",
+            "WITH best AS (SELECT model FROM cars PREFERRING LOW price PARTITION BY color) "
+            "SELECT model FROM best",
+            schema=schema,
+            dialect="exasol",
+        )
+        self.assertEqual([n.name for n in node.walk()], ["MODEL", "BEST.MODEL", "CARS.MODEL"])
+        self.assertEqual(
+            node.downstream[0].source.sql(dialect="exasol"),
+            "SELECT CARS.MODEL AS MODEL FROM CARS AS CARS PREFERRING LOW CARS.PRICE PARTITION BY CARS.COLOR",
+        )
+
+        # Subquery inside a preference term is registered as a scope
+        with self.assertNoLogs("sqlglot", level="WARNING"):
+            node = lineage(
+                "model",
+                "SELECT model FROM cars PREFERRING HIGH power PRIOR TO (color IN (SELECT color FROM fav))",
+                schema=schema,
+                dialect="exasol",
+            )
+        self.assertEqual([d.name for d in node.downstream], ["CARS.MODEL"])
+        self.assertEqual(
+            node.source.sql(dialect="exasol"),
+            "SELECT CARS.MODEL AS MODEL FROM CARS AS CARS PREFERRING HIGH CARS.POWER "
+            "PRIOR TO (CARS.COLOR IN (SELECT FAV.COLOR AS COLOR FROM FAV AS FAV))",
+        )
+
+        # Columns in PREFERRING are qualified with the right join source
+        node = lineage(
+            "country",
+            "SELECT c.model, m.country FROM cars c JOIN makers m ON c.model = m.model "
+            "PREFERRING LOW price PLUS HIGH country",
+            schema=schema,
+            dialect="exasol",
+        )
+        self.assertEqual([d.name for d in node.downstream], ["M.COUNTRY"])
+        self.assertEqual(
+            node.source.sql(dialect="exasol"),
+            "SELECT M.COUNTRY AS COUNTRY FROM CARS AS C JOIN MAKERS AS M ON C.MODEL = M.MODEL "
+            "PREFERRING LOW C.PRICE PLUS HIGH M.COUNTRY",
+        )
+
+        # LOCAL.<alias> is expanded to the aliased expression
+        node = lineage(
+            "score",
+            "SELECT model, price * 10 AS score FROM cars PREFERRING HIGH LOCAL.score",
+            schema=schema,
+            dialect="exasol",
+        )
+        self.assertEqual([d.name for d in node.downstream], ["CARS.PRICE"])
+        self.assertEqual(
+            node.source.sql(dialect="exasol"),
+            "SELECT CARS.PRICE * 10 AS SCORE FROM CARS AS CARS PREFERRING HIGH CARS.PRICE * 10",
+        )
+
+        # A plain name resolves to the source column, even if it matches an alias
+        node = lineage(
+            "price",
+            "SELECT model, -power AS price FROM cars PREFERRING HIGH price",
+            schema=schema,
+            dialect="exasol",
+        )
+        self.assertEqual([d.name for d in node.downstream], ["CARS.POWER"])
+        self.assertEqual(
+            node.source.sql(dialect="exasol"),
+            "SELECT -CARS.POWER AS PRICE FROM CARS AS CARS PREFERRING HIGH CARS.PRICE",
+        )
+
+        # LOCAL.<alias> resolves to the alias, even if a source column has the same name
+        node = lineage(
+            "model",
+            "SELECT model, -power AS price FROM cars PREFERRING HIGH LOCAL.price",
+            schema=schema,
+            dialect="exasol",
+        )
+        self.assertEqual(
+            node.source.sql(dialect="exasol"),
+            "SELECT CARS.MODEL AS MODEL FROM CARS AS CARS PREFERRING HIGH -CARS.POWER",
+        )

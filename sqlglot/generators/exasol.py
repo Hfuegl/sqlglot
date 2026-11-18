@@ -336,11 +336,19 @@ class ExasolGenerator(generator.Generator):
         partition_by = f" PARTITION BY {partition_by}" if partition_by else ""
         return f"{self.seg('PREFERRING')}{self.sep()}{this}{partition_by}"
 
+    def _preference_operand_sql(self, expression: exp.PreferenceHigh | exp.PreferenceLow) -> str:
+        # HIGH / LOW don't accept AND / OR / NOT operands without parentheses, which can be
+        # produced by expanding a LOCAL alias reference
+        this = expression.this
+        if isinstance(this, (exp.Connector, exp.Not)):
+            return self.sql(exp.paren(this))
+        return self.sql(this)
+
     def preferencehigh_sql(self, expression: exp.PreferenceHigh) -> str:
-        return f"HIGH {self.sql(expression, 'this')}"
+        return f"HIGH {self._preference_operand_sql(expression)}"
 
     def preferencelow_sql(self, expression: exp.PreferenceLow) -> str:
-        return f"LOW {self.sql(expression, 'this')}"
+        return f"LOW {self._preference_operand_sql(expression)}"
 
     def preferenceinverse_sql(self, expression: exp.PreferenceInverse) -> str:
         return f"INVERSE({self.sql(expression, 'this')})"
